@@ -1,2 +1,6 @@
 scikit-learn
 joblib
+streamlit
+pandas
+joblib
+os
