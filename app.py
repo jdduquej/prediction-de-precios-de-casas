@@ -1,183 +1,142 @@
-"""
-App de Streamlit para predecir el valor medio de la vivienda
-a partir de variables socioeconómicas y geográficas.
-
-IMPORTANTE:
-- El modelo se descarga en tiempo de ejecución desde un repositorio
-  público de GitHub (URL raw) y se carga en memoria con joblib.
-  La URL y el token de GitHub se leen desde st.secrets (ver más abajo).
-- Idealmente el archivo es un Pipeline de sklearn que incluye el
-  preprocesamiento (escalado, codificación de 'proximidad_oceano', etc.)
-  junto con el estimador final.
-- Si tu modelo NO incluye el preprocesamiento, debes replicarlo
-  manualmente antes de llamar a modelo.predict() (ver sección
-  "AJUSTE MANUAL" más abajo, comentada).
-"""
-
 import streamlit as st
-import pandas as pd
-import joblib
 import requests
-import io
+import pandas as pd
+import matplotlib.pyplot as plt
 
-# ----------------------------------------------------------------------
-# Configuración general de la página
-# ----------------------------------------------------------------------
+# ---------------------------------------------------------
+# CONFIGURACIÓN DE LA APP
+# ---------------------------------------------------------
 st.set_page_config(
-    page_title="Predicción de Precio de Vivienda",
-    page_icon="🏠",
-    layout="centered",
+    page_title="Predicción de Precios de Vivienda",
+    page_icon="🏡",
+    layout="wide"
 )
 
-# ----------------------------------------------------------------------
-# Configuración de descarga del modelo desde GitHub
-# ----------------------------------------------------------------------
-# En Streamlit Cloud: Settings -> Secrets, agrega algo como:
-#
-#   GITHUB_TOKEN = "ghp_xxxxxxxxxxxxxxxxxxxx"
-#   MODEL_URL = "https://raw.githubusercontent.com/usuario/repositorio/main/modelo.pkl"
-#
-# Si corres la app localmente, crea un archivo .streamlit/secrets.toml
-# con el mismo contenido.
+# ---------------------------------------------------------
+# ESTADO DE SESIÓN (historial)
+# ---------------------------------------------------------
+if "history" not in st.session_state:
+    st.session_state.history = []
 
-MODEL_URL = st.secrets.get(
-    "MODEL_URL",
-    "https://raw.githubusercontent.com/usuario/repositorio/main/modelo.pkl",
-)
-GITHUB_TOKEN = st.secrets.get("GITHUB_TOKEN", None)
+# ---------------------------------------------------------
+# SIDEBAR
+# ---------------------------------------------------------
+st.sidebar.title("⚙️ Configuración")
 
+st.sidebar.markdown("### Endpoint del modelo")
+API_URL = st.sidebar.text_input("API URL de DataRobot", "YOUR_API_URL")
+API_KEY = st.sidebar.text_input("API Key", "YOUR_API_KEY", type="password")
 
-@st.cache_resource
-def cargar_modelo(url: str, token: str):
-    """Descarga el modelo desde GitHub (raw) y lo carga con joblib."""
-    headers = {}
-    if token:
-        headers["Authorization"] = f"token {token}"
+st.sidebar.markdown("### Opciones de visualización")
+show_table = st.sidebar.checkbox("Mostrar tabla de historial", value=True)
+show_chart = st.sidebar.checkbox("Mostrar gráfico de predicciones", value=True)
 
-    try:
-        respuesta = requests.get(url, headers=headers, timeout=30)
-        respuesta.raise_for_status()
-    except requests.exceptions.RequestException as e:
-        st.error(f"No se pudo descargar el modelo desde GitHub: {e}")
-        return None
+st.sidebar.markdown("---")
+st.sidebar.write("Desarrollado para integración con DataRobot + Streamlit Cloud.")
 
-    try:
-        modelo_cargado = joblib.load(io.BytesIO(respuesta.content))
-    except Exception as e:
-        st.error(f"El archivo se descargó pero no pudo cargarse con joblib: {e}")
-        return None
+# ---------------------------------------------------------
+# TÍTULO PRINCIPAL
+# ---------------------------------------------------------
+st.title("🏡 Predicción del Precio Medio de Viviendas")
+st.write("Modifica las variables de entrada y obtén la predicción generada por tu modelo desplegado en DataRobot.")
 
-    return modelo_cargado
+# ---------------------------------------------------------
+# FORMULARIO DE VARIABLES
+# ---------------------------------------------------------
+with st.form("input_form"):
+    st.subheader("Variables de entrada")
 
+    col1, col2 = st.columns(2)
 
-with st.spinner("Descargando y cargando el modelo desde GitHub..."):
-    modelo = cargar_modelo(MODEL_URL, GITHUB_TOKEN)
-
-st.title("🏠 Predicción del Valor Medio de Vivienda")
-st.write(
-    "Ajusta las variables en el panel lateral y presiona **Predecir** "
-    "para estimar el valor medio de las viviendas en esa zona."
-)
-
-if modelo is None:
-    st.error(
-        "No se pudo cargar el modelo. Revisa que el secreto 'MODEL_URL' "
-        "apunte a la URL raw correcta del archivo en GitHub y que el "
-        "archivo sea un objeto válido guardado con joblib."
-    )
-    st.stop()
-
-# ----------------------------------------------------------------------
-# Panel lateral: inputs del usuario
-# ----------------------------------------------------------------------
-st.sidebar.header("Variables de entrada")
-
-longitud = st.sidebar.slider(
-    "Longitud", min_value=-124.35, max_value=-114.31, value=-119.57, step=0.01
-)
-latitud = st.sidebar.slider(
-    "Latitud", min_value=32.54, max_value=41.95, value=35.63, step=0.01
-)
-edad_mediana_vivienda = st.sidebar.slider(
-    "Edad mediana de la vivienda (años)", min_value=1, max_value=52, value=28
-)
-total_habitaciones = st.sidebar.number_input(
-    "Total de habitaciones", min_value=1, value=2000, step=10
-)
-total_dormitorios = st.sidebar.number_input(
-    "Total de dormitorios", min_value=1, value=400, step=10
-)
-poblacion = st.sidebar.number_input(
-    "Población", min_value=1, value=1000, step=10
-)
-hogares = st.sidebar.number_input(
-    "Hogares", min_value=1, value=400, step=10
-)
-ingreso_mediano = st.sidebar.slider(
-    "Ingreso mediano (en decenas de miles de USD)",
-    min_value=0.0, max_value=15.0, value=3.5, step=0.1
-)
-proximidad_oceano = st.sidebar.selectbox(
-    "Proximidad al océano",
-    options=["NEAR BAY", "<1H OCEAN", "INLAND", "NEAR OCEAN", "ISLAND"],
-)
-
-# ----------------------------------------------------------------------
-# Construcción del DataFrame con los nombres EXACTOS de las columnas
-# usadas en el entrenamiento. Ajusta los nombres si en tu dataset
-# difieren (ej: si usaste los nombres en inglés originales).
-# ----------------------------------------------------------------------
-datos_entrada = pd.DataFrame(
-    {
-        "longitud": [longitud],
-        "latitud": [latitud],
-        "edad_mediana_vivienda": [edad_mediana_vivienda],
-        "total_habitaciones": [total_habitaciones],
-        "total_dormitorios": [total_dormitorios],
-        "poblacion": [poblacion],
-        "hogares": [hogares],
-        "ingreso_mediano": [ingreso_mediano],
-        "proximidad_oceano": [proximidad_oceano],
-    }
-)
-
-st.subheader("Resumen de los datos ingresados")
-st.dataframe(datos_entrada, use_container_width=True)
-
-# ----------------------------------------------------------------------
-# AJUSTE MANUAL (opcional):
-# Si tu modelo NO es un Pipeline y espera ya las variables escaladas
-# o la columna 'proximidad_oceano' codificada en dummies, descomenta
-# y adapta este bloque antes de predecir:
-#
-# datos_entrada = pd.get_dummies(datos_entrada, columns=["proximidad_oceano"])
-# columnas_esperadas = ["longitud", "latitud", ..., "proximidad_oceano_INLAND", ...]
-# for col in columnas_esperadas:
-#     if col not in datos_entrada.columns:
-#         datos_entrada[col] = 0
-# datos_entrada = datos_entrada[columnas_esperadas]
-# datos_entrada[columnas_numericas] = scaler.transform(datos_entrada[columnas_numericas])
-# ----------------------------------------------------------------------
-
-# ----------------------------------------------------------------------
-# Predicción
-# ----------------------------------------------------------------------
-if st.button("🔮 Predecir valor de la vivienda", type="primary"):
-    try:
-        prediccion = modelo.predict(datos_entrada)
-        valor_estimado = prediccion[0]
-        st.success(f"💰 Valor medio estimado de la vivienda: **${valor_estimado:,.2f}**")
-    except Exception as e:
-        st.error(
-            "Ocurrió un error al generar la predicción. Verifica que las "
-            "columnas y el formato de los datos coincidan con los que "
-            "espera el modelo."
+    with col1:
+        longitud = st.number_input("Longitud", value=-120.0)
+        latitud = st.number_input("Latitud", value=35.0)
+        edad_mediana_vivienda = st.number_input("Edad mediana de la vivienda", value=20)
+        proximidad_oceano = st.selectbox(
+            "Proximidad al océano",
+            ["NEAR BAY", "INLAND", "NEAR OCEAN", "ISLAND", "1H OCEAN"]
         )
-        st.exception(e)
 
-st.caption(
-    "Modelo entrenado con datos de viviendas en California "
-    "(longitud, latitud, edad mediana de vivienda, proximidad al océano, "
-    "total de habitaciones, total de dormitorios, población, hogares e "
-    "ingreso mediano)."
-)
+    with col2:
+        total_habitaciones = st.number_input("Total habitaciones", value=1500)
+        total_dormitorios = st.number_input("Total dormitorios", value=300)
+        poblacion = st.number_input("Población", value=800)
+        hogares = st.number_input("Hogares", value=300)
+        ingreso_mediano = st.number_input("Ingreso mediano", value=4.5)
+
+    submitted = st.form_submit_button("🔮 Predecir precio medio")
+
+# ---------------------------------------------------------
+# LÓGICA DE PREDICCIÓN
+# ---------------------------------------------------------
+if submitted:
+    inputs = {
+        "longitud": longitud,
+        "latitud": latitud,
+        "edad_mediana_vivienda": edad_mediana_vivienda,
+        "proximidad_oceano": proximidad_oceano,
+        "total_habitaciones": total_habitaciones,
+        "total_dormitorios": total_dormitorios,
+        "poblacion": poblacion,
+        "hogares": hogares,
+        "ingreso_mediano": ingreso_mediano
+    }
+
+    st.subheader("Resultado de la predicción")
+
+    if not API_URL or API_URL == "YOUR_API_URL":
+        st.error("Configura un API URL válido en el sidebar.")
+    else:
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {API_KEY}" if API_KEY else ""
+        }
+
+        with st.spinner("Consultando modelo en DataRobot..."):
+            try:
+                # Ajusta el payload según tu despliegue en DataRobot
+                payload = {"data": [inputs]}
+                response = requests.post(API_URL, json=payload, headers=headers)
+
+                if response.status_code == 200:
+                    prediction = response.json()
+
+                    # Ajusta esta línea al formato real de respuesta
+                    pred_value = prediction["data"][0]["prediction"]
+
+                    st.success(f"🏠 **Precio medio estimado:** ${pred_value:,.2f}")
+
+                    # Guardar en historial
+                    record = inputs.copy()
+                    record["prediccion_precio_medio"] = pred_value
+                    st.session_state.history.append(record)
+
+                else:
+                    st.error(f"Error en la API: {response.status_code}")
+                    st.write(response.text)
+
+            except Exception as e:
+                st.error("Error al conectar con el modelo.")
+                st.write(str(e))
+
+# ---------------------------------------------------------
+# HISTORIAL DE PREDICCIONES
+# ---------------------------------------------------------
+st.subheader("Historial de predicciones")
+
+if st.session_state.history:
+    df_history = pd.DataFrame(st.session_state.history)
+
+    if show_table:
+        st.dataframe(df_history)
+
+    if show_chart and "prediccion_precio_medio" in df_history.columns:
+        st.subheader("Gráfico de precios predichos")
+        fig, ax = plt.subplots(figsize=(8, 4))
+        ax.plot(df_history["prediccion_precio_medio"], marker="o")
+        ax.set_xlabel("Número de predicción")
+        ax.set_ylabel("Precio medio predicho")
+        ax.set_title("Evolución de las predicciones")
+        st.pyplot(fig)
+else:
+    st.info("Aún no hay predicciones en el historial. Realiza una para comenzar.")
