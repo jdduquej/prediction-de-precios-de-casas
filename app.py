@@ -3,10 +3,12 @@ App de Streamlit para predecir el valor medio de la vivienda
 a partir de variables socioeconómicas y geográficas.
 
 IMPORTANTE:
-- Este script espera que el modelo esté guardado como un archivo
-  'modelo.pkl' (joblib) que sea, idealmente, un Pipeline de sklearn
-  que incluya el preprocesamiento (escalado, codificación de
-  'proximidad_oceano', etc.) junto con el estimador final.
+- El modelo se descarga en tiempo de ejecución desde un repositorio
+  público de GitHub (URL raw) y se carga en memoria con joblib.
+  La URL y el token de GitHub se leen desde st.secrets (ver más abajo).
+- Idealmente el archivo es un Pipeline de sklearn que incluye el
+  preprocesamiento (escalado, codificación de 'proximidad_oceano', etc.)
+  junto con el estimador final.
 - Si tu modelo NO incluye el preprocesamiento, debes replicarlo
   manualmente antes de llamar a modelo.predict() (ver sección
   "AJUSTE MANUAL" más abajo, comentada).
@@ -15,7 +17,8 @@ IMPORTANTE:
 import streamlit as st
 import pandas as pd
 import joblib
-import os
+import requests
+import io
 
 # ----------------------------------------------------------------------
 # Configuración general de la página
@@ -27,19 +30,48 @@ st.set_page_config(
 )
 
 # ----------------------------------------------------------------------
-# Carga del modelo (con caché para no recargarlo en cada interacción)
+# Configuración de descarga del modelo desde GitHub
 # ----------------------------------------------------------------------
-RUTA_MODELO = "modelo.pkl"
+# En Streamlit Cloud: Settings -> Secrets, agrega algo como:
+#
+#   GITHUB_TOKEN = "ghp_xxxxxxxxxxxxxxxxxxxx"
+#   MODEL_URL = "https://raw.githubusercontent.com/usuario/repositorio/main/modelo.pkl"
+#
+# Si corres la app localmente, crea un archivo .streamlit/secrets.toml
+# con el mismo contenido.
+
+MODEL_URL = st.secrets.get(
+    "MODEL_URL",
+    "https://raw.githubusercontent.com/usuario/repositorio/main/modelo.pkl",
+)
+GITHUB_TOKEN = st.secrets.get("GITHUB_TOKEN", None)
 
 
 @st.cache_resource
-def cargar_modelo(ruta: str):
-    if not os.path.exists(ruta):
+def cargar_modelo(url: str, token: str):
+    """Descarga el modelo desde GitHub (raw) y lo carga con joblib."""
+    headers = {}
+    if token:
+        headers["Authorization"] = f"token {token}"
+
+    try:
+        respuesta = requests.get(url, headers=headers, timeout=30)
+        respuesta.raise_for_status()
+    except requests.exceptions.RequestException as e:
+        st.error(f"No se pudo descargar el modelo desde GitHub: {e}")
         return None
-    return joblib.load(ruta)
+
+    try:
+        modelo_cargado = joblib.load(io.BytesIO(respuesta.content))
+    except Exception as e:
+        st.error(f"El archivo se descargó pero no pudo cargarse con joblib: {e}")
+        return None
+
+    return modelo_cargado
 
 
-modelo = cargar_modelo(RUTA_MODELO)
+with st.spinner("Descargando y cargando el modelo desde GitHub..."):
+    modelo = cargar_modelo(MODEL_URL, GITHUB_TOKEN)
 
 st.title("🏠 Predicción del Valor Medio de Vivienda")
 st.write(
@@ -49,9 +81,9 @@ st.write(
 
 if modelo is None:
     st.error(
-        f"No se encontró el archivo '{RUTA_MODELO}'. "
-        "Coloca el modelo entrenado (guardado con joblib) en el mismo "
-        "directorio que este script."
+        "No se pudo cargar el modelo. Revisa que el secreto 'MODEL_URL' "
+        "apunte a la URL raw correcta del archivo en GitHub y que el "
+        "archivo sea un objeto válido guardado con joblib."
     )
     st.stop()
 
